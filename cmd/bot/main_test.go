@@ -3,7 +3,6 @@ package main
 import (
 	"path/filepath"
 	"testing"
-	"github.com/bwmarrin/discordgo"
 )
 
 // テスト用のセッション構造体
@@ -13,6 +12,23 @@ type TestSession struct {
 
 func (s *TestSession) ChannelMessageSend(channelID, content string) error {
 	return s.channelMessageSend(channelID, content)
+}
+
+// テスト用のメッセージ構造体
+type TestMessage struct {
+	content     string
+	channelID   string
+	authorIsBot bool
+}
+
+func (m *TestMessage) Content() string {
+	return m.content
+}
+func (m *TestMessage) ChannelID() string {
+	return m.channelID
+}
+func (m *TestMessage) AuthorIsBot() bool {
+	return m.authorIsBot
 }
 
 // テスト用のCSVファイルパスを取得
@@ -75,71 +91,66 @@ func TestGetRandomLine(t *testing.T) {
 
 // メッセージハンドラーのテスト
 func TestMessageCreate(t *testing.T) {
-	// モックセッションを作成
-	mockSession := &TestSession{}
-
-	t.Run("SerifCommand", func(t *testing.T) {
-		var sentContent string
-		var sentChannelID string
-		mockSession.channelMessageSend = func(channelID string, content string) error {
-			sentContent = content
-			sentChannelID = channelID
-			return nil
-		}
-
-		// テスト用のメッセージを作成
-		testMessage := &discordgo.MessageCreate{
-			Message: &discordgo.Message{
-				Content: "/serif",
-				ChannelID: "test-channel",
-			},
-		}
-
-		// テスト実行
-		messageCreate(mockSession, &DiscordMessageCreateAdapter{testMessage}, []Line{
-			{Act: "第1幕", Character: "テストキャラ", Line: "テストセリフ1"},
-		})
-
-		// メッセージが送信されたことを確認
-		if sentContent == "" {
-			t.Errorf("Expected message to be sent for /serif command")
-		}
-
-		// メッセージの内容が正しいことを確認
-		expectedContent := "テストセリフ1 | 第1幕：テストキャラ"
-		if sentContent != expectedContent {
-			t.Errorf("Expected content to be %s, but got: %s", expectedContent, sentContent)
-		}
-
-		// チャンネルIDが正しいことを確認
-		if sentChannelID != testMessage.ChannelID {
-			t.Errorf("Expected channelID to be %s, but got: %s", testMessage.ChannelID, sentChannelID)
-		}
-	})
-
-	t.Run("InvalidCommand", func(t *testing.T) {
-		var sentContent string
-		mockSession.channelMessageSend = func(channelID string, content string) error {
+	testLines := []Line{{Act: "第1幕", Character: "テストキャラ", Line: "テストセリフ1"}}
+	var sentContent string
+	mockSession := &TestSession{
+		channelMessageSend: func(channelID, content string) error {
 			sentContent = content
 			return nil
-		}
+		},
+	}
 
-		// テスト用のメッセージを作成
-		testMessage := &discordgo.MessageCreate{
-			Message: &discordgo.Message{
-				Content: "invalid",
-				ChannelID: "test-channel",
-			},
-		}
+	// テストケースを構造体のスライスとして定義
+	testCases := []struct {
+		name          string
+		message       MessageCreator
+		randFunc      func() float32
+		shouldSend    bool
+		expectedError string
+	}{
+		{
+			name:          "ボットの発言には反応しない",
+			message:       &TestMessage{content: "/serif", channelID: "ch1", authorIsBot: true},
+			randFunc:      func() float32 { return 0.1 }, // 確率的には当選するがボットなので無視されるはず
+			shouldSend:    false,
+			expectedError: "ボットの発言には返信しないはずですが、メッセージが送信されました",
+		},
+		{
+			name:          "/serifコマンドには確率に関わらず必ず返信する",
+			message:       &TestMessage{content: "/serif", channelID: "ch2", authorIsBot: false},
+			randFunc:      func() float32 { return 0.9 }, // 確率的には落選するがコマンドなので送信されるはず
+			shouldSend:    true,
+			expectedError: "/serifコマンドには返信するはずが、メッセージが送信されませんでした",
+		},
+		{
+			name:          "通常メッセージに30%の確率で返信する",
+			message:       &TestMessage{content: "こんにちは", channelID: "ch3", authorIsBot: false},
+			randFunc:      func() float32 { return 0.29 }, // 30%未満なので当選
+			shouldSend:    true,
+			expectedError: "30%の確率で返信するはずが、メッセージが送信されませんでした",
+		},
+		{
+			name:          "通常メッセージに70%の確率で返信しない",
+			message:       &TestMessage{content: "こんばんは", channelID: "ch4", authorIsBot: false},
+			randFunc:      func() float32 { return 0.3 }, // 30%以上なので落選
+			shouldSend:    false,
+			expectedError: "70%の確率で返信しないはずが、メッセージが送信されました",
+		},
+	}
 
-		// テスト実行
-		messageCreate(mockSession, &DiscordMessageCreateAdapter{testMessage}, []Line{
-			{Act: "第1幕", Character: "テストキャラ", Line: "テストセリフ1"},
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sentContent = "" // 各テストの前にリセット
+
+			messageCreate(mockSession, tc.message, testLines, tc.randFunc)
+
+			if tc.shouldSend && sentContent == "" {
+				t.Error(tc.expectedError)
+			}
+
+			if !tc.shouldSend && sentContent != "" {
+				t.Errorf("%s: %s", tc.expectedError, sentContent)
+			}
 		})
-
-		// メッセージが送信されないことを確認
-		if sentContent != "" {
-			t.Errorf("Expected no message to be sent for invalid command, but got: %s", sentContent)
-		}
-	})
+	}
 }

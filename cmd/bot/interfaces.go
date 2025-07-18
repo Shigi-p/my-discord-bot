@@ -9,4 +9,5 @@ type ChannelMessageSender interface {
 type MessageCreator interface {
 	Content() string
 	ChannelID() string
+	AuthorIsBot() bool
 }

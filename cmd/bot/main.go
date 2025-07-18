@@ -35,6 +35,10 @@ func (a *DiscordMessageCreateAdapter) ChannelID() string {
 	return a.MessageCreate.ChannelID
 }
 
+func (a *DiscordMessageCreateAdapter) AuthorIsBot() bool {
+	return a.MessageCreate.Author.Bot
+}
+
 type DiscordSessionAdapter struct {
 	*discordgo.Session
 }
@@ -99,7 +103,7 @@ func main() {
 
 	// ハンドラーをラップ
 	wrappedHandler := func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		messageCreate(&DiscordSessionAdapter{s}, &DiscordMessageCreateAdapter{m}, lines)
+		messageCreate(&DiscordSessionAdapter{s}, &DiscordMessageCreateAdapter{m}, lines, rand.Float32)
 	}
 	dg.AddHandler(wrappedHandler)
 	dg.Identify.Intents = discordgo.IntentsGuildMessages
@@ -122,19 +126,33 @@ func main() {
 	dg.Close()
 }
 
+// sendRandomLine は、与えられたセリフリストからランダムに一つを選んで送信する共通関数
+func sendRandomLine(s ChannelMessageSender, channelID string, lines []Line) {
+	response := getRandomLine(lines)
+	s.ChannelMessageSend(channelID, response)
+}
+
 func getRandomLine(lines []Line) string {
 	if len(lines) == 0 {
 		return "セリフが見つかりませんでした"
 	}
 	index := rand.Intn(len(lines))
 	line := lines[index]
-	return fmt.Sprintf("%s | %s：%s", line.Line, line.Act, line.Character)
+	return fmt.Sprintf("%s | %s：%s", line.Line, line.Act, line.Character) // TODO: フォーマットを修正
 }
 
 // メッセージハンドラー
-func messageCreate(s ChannelMessageSender, m MessageCreator, lines []Line) {
-	if strings.HasPrefix(strings.ToLower(m.Content()), "/serif") {
-		response := getRandomLine(lines)
-		s.ChannelMessageSend(m.ChannelID(), response)
+func messageCreate(s ChannelMessageSender, m MessageCreator, lines []Line, randFunc func() float32) {
+	// ボット自身の発言には反応しない
+	if m.AuthorIsBot() {
+		return
+	}
+
+	isSerifCommand := strings.HasPrefix(strings.ToLower(m.Content()), "/serif")
+	shouldReplyRandomly := randFunc() < 0.3
+
+	// /serifコマンド、または30%の確率で返信する
+	if isSerifCommand || shouldReplyRandomly {
+		sendRandomLine(s, m.ChannelID(), lines)
 	}
 }
