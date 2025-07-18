@@ -3,15 +3,24 @@ package main
 import (
 	"encoding/csv"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+)
+
+var (
+	commands = []*discordgo.ApplicationCommand{
+		{
+			Name:        "serif",
+			Description: "ランダムなセリフを返します",
+		},
+	}
 )
 
 // データ構造体
@@ -46,6 +55,10 @@ type DiscordSessionAdapter struct {
 func (a *DiscordSessionAdapter) ChannelMessageSend(channelID, content string) error {
 	_, err := a.Session.ChannelMessageSend(channelID, content)
 	return err
+}
+
+func (a *DiscordSessionAdapter) InteractionRespond(i *discordgo.Interaction, r *discordgo.InteractionResponse) error {
+	return a.Session.InteractionRespond(i, r)
 }
 
 func loadLines(csvPath string) error {
@@ -105,6 +118,11 @@ func main() {
 	wrappedHandler := func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		messageCreate(&DiscordSessionAdapter{s}, &DiscordMessageCreateAdapter{m}, lines, rand.Float32)
 	}
+	// スラッシュコマンド用のハンドラーを追加
+	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		interactionCreate(&DiscordSessionAdapter{s}, i, lines)
+	})
+
 	dg.AddHandler(wrappedHandler)
 	dg.Identify.Intents = discordgo.IntentsGuildMessages
 
@@ -114,12 +132,28 @@ func main() {
 		return
 	}
 
+	fmt.Println("Adding commands...")
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
+	for i, v := range commands {
+		cmd, err := dg.ApplicationCommandCreate(dg.State.User.ID, "", v)
+		if err != nil {
+			log.Fatalf("Cannot create '%v' command: %v", v.Name, err)
+		}
+		registeredCommands[i] = cmd
+	}
+
 	fmt.Println("Bot started. Press CTRL+C to shutdown.")
 
 	// Wait for program to exit
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
+
+	fmt.Println("Removing commands...")
+	for _, v := range registeredCommands {
+		err := dg.ApplicationCommandDelete(dg.State.User.ID, "", v.ID)
+		log.Printf("Cannot delete '%v' command: %v", v.Name, err)
+	}
 
 	// Close session
 	fmt.Println("Bot to shutdown.")
@@ -148,11 +182,28 @@ func messageCreate(s ChannelMessageSender, m MessageCreator, lines []Line, randF
 		return
 	}
 
-	isSerifCommand := strings.HasPrefix(strings.ToLower(m.Content()), "/serif")
 	shouldReplyRandomly := randFunc() < 0.3
 
-	// /serifコマンド、または30%の確率で返信する
-	if isSerifCommand || shouldReplyRandomly {
+	// 30%の確率で返信する
+	if shouldReplyRandomly {
 		sendRandomLine(s, m.ChannelID(), lines)
+	}
+}
+
+// スラッシュコマンドハンドラー
+func interactionCreate(s InteractionResponder, i *discordgo.InteractionCreate, lines []Line) {
+	if i.Interaction.Type == discordgo.InteractionApplicationCommand {
+		if i.Interaction.ApplicationCommandData().Name == "serif" {
+			responseContent := getRandomLine(lines)
+			err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: responseContent,
+				},
+			})
+			if err != nil {
+				log.Printf("Failed to respond to interaction: %v", err)
+			}
+		}
 	}
 }

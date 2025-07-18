@@ -3,15 +3,22 @@ package main
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 // テスト用のセッション構造体
 type TestSession struct {
-	channelMessageSend func(string, string) error
+	channelMessageSend   func(string, string) error
+	interactionRespond func(*discordgo.Interaction, *discordgo.InteractionResponse) error
 }
 
 func (s *TestSession) ChannelMessageSend(channelID, content string) error {
 	return s.channelMessageSend(channelID, content)
+}
+
+func (s *TestSession) InteractionRespond(i *discordgo.Interaction, r *discordgo.InteractionResponse) error {
+	return s.interactionRespond(i, r)
 }
 
 // テスト用のメッセージ構造体
@@ -116,13 +123,6 @@ func TestMessageCreate(t *testing.T) {
 			expectedError: "ボットの発言には返信しないはずですが、メッセージが送信されました",
 		},
 		{
-			name:          "/serifコマンドには確率に関わらず必ず返信する",
-			message:       &TestMessage{content: "/serif", channelID: "ch2", authorIsBot: false},
-			randFunc:      func() float32 { return 0.9 }, // 確率的には落選するがコマンドなので送信されるはず
-			shouldSend:    true,
-			expectedError: "/serifコマンドには返信するはずが、メッセージが送信されませんでした",
-		},
-		{
 			name:          "通常メッセージに30%の確率で返信する",
 			message:       &TestMessage{content: "こんにちは", channelID: "ch3", authorIsBot: false},
 			randFunc:      func() float32 { return 0.29 }, // 30%未満なので当選
@@ -153,4 +153,61 @@ func TestMessageCreate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// スラッシュコマンドハンドラーのテスト
+func TestInteractionCreate(t *testing.T) {
+	testLines := []Line{{Act: "第1幕", Character: "テストキャラ", Line: "テストセリフ1"}}
+	var capturedResponse *discordgo.InteractionResponse
+	mockSession := &TestSession{
+		interactionRespond: func(i *discordgo.Interaction, r *discordgo.InteractionResponse) error {
+			capturedResponse = r
+			return nil
+		},
+	}
+
+	t.Run("serifコマンドが実行された場合、応答が返される", func(t *testing.T) {
+		capturedResponse = nil // reset
+
+		testInteraction := &discordgo.InteractionCreate{
+			Interaction: &discordgo.Interaction{
+				Type: discordgo.InteractionApplicationCommand,
+				Data: discordgo.ApplicationCommandInteractionData{
+					Name: "serif",
+				},
+			},
+		}
+
+		interactionCreate(mockSession, testInteraction, testLines)
+
+		if capturedResponse == nil {
+			t.Fatal("InteractionRespondが呼び出されませんでした")
+		}
+		if capturedResponse.Type != discordgo.InteractionResponseChannelMessageWithSource {
+			t.Errorf("期待する応答タイプと異なります. got=%v, want=%v", capturedResponse.Type, discordgo.InteractionResponseChannelMessageWithSource)
+		}
+		expectedContent := "テストセリフ1 | 第1幕：テストキャラ"
+		if capturedResponse.Data.Content != expectedContent {
+			t.Errorf("期待する応答内容と異なります. got=%q, want=%q", capturedResponse.Data.Content, expectedContent)
+		}
+	})
+
+	t.Run("serif以外のコマンドが実行された場合、何もされない", func(t *testing.T) {
+		capturedResponse = nil // reset
+
+		testInteraction := &discordgo.InteractionCreate{
+			Interaction: &discordgo.Interaction{
+				Type: discordgo.InteractionApplicationCommand,
+				Data: discordgo.ApplicationCommandInteractionData{
+					Name: "other-command",
+				},
+			},
+		}
+
+		interactionCreate(mockSession, testInteraction, testLines)
+
+		if capturedResponse != nil {
+			t.Error("serif以外のコマンドには応答しないはずですが、応答が返されました")
+		}
+	})
 }
