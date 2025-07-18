@@ -6,6 +6,8 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    volumes:
+      - ./serif-list.csv:/serif-list.csv
 
   go:
     image: golang:1.22-alpine
