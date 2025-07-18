@@ -109,47 +109,66 @@ func TestMessageCreate(t *testing.T) {
 
 	// テストケースを構造体のスライスとして定義
 	testCases := []struct {
-		name          string
-		message       MessageCreator
-		randFunc      func() float32
-		shouldSend    bool
-		expectedError string
+		name            string
+		message         MessageCreator
+		randFunc        func() float32
+		allowedChannels map[string]bool
+		shouldSend      bool
+		expectedContent string
 	}{
 		{
-			name:          "ボットの発言には反応しない",
-			message:       &TestMessage{content: "/serif", channelID: "ch1", authorIsBot: true},
-			randFunc:      func() float32 { return 0.1 }, // 確率的には当選するがボットなので無視されるはず
-			shouldSend:    false,
-			expectedError: "ボットの発言には返信しないはずですが、メッセージが送信されました",
+			name:            "ランダム返信が無効(nil)の場合、何もされない",
+			message:         &TestMessage{content: "any", channelID: "ch1", authorIsBot: false},
+			randFunc:        func() float32 { return 0.1 },
+			allowedChannels: nil,
+			shouldSend:      false,
 		},
 		{
-			name:          "通常メッセージに30%の確率で返信する",
-			message:       &TestMessage{content: "こんにちは", channelID: "ch3", authorIsBot: false},
-			randFunc:      func() float32 { return 0.29 }, // 30%未満なので当選
-			shouldSend:    true,
-			expectedError: "30%の確率で返信するはずが、メッセージが送信されませんでした",
+			name:            "許可されていないチャンネルでは何もされない",
+			message:         &TestMessage{content: "any", channelID: "ch-other", authorIsBot: false},
+			randFunc:        func() float32 { return 0.1 },
+			allowedChannels: map[string]bool{"ch-allowed": true},
+			shouldSend:      false,
 		},
 		{
-			name:          "通常メッセージに70%の確率で返信しない",
-			message:       &TestMessage{content: "こんばんは", channelID: "ch4", authorIsBot: false},
-			randFunc:      func() float32 { return 0.3 }, // 30%以上なので落選
-			shouldSend:    false,
-			expectedError: "70%の確率で返信しないはずが、メッセージが送信されました",
+			name:            "許可されたチャンネルで確率当選した場合、確率付きで返信する",
+			message:         &TestMessage{content: "any", channelID: "ch-allowed", authorIsBot: false},
+			randFunc:        func() float32 { return 0.15 },
+			allowedChannels: map[string]bool{"ch-allowed": true},
+			shouldSend:      true,
+			expectedContent: "(1D100<=30) ＞ 16 ＞ 成功！\nテストセリフ1 | 第1幕：テストキャラ",
+		},
+		{
+			name:            "許可されたチャンネルで確率落選した場合、何もされない",
+			message:         &TestMessage{content: "any", channelID: "ch-allowed", authorIsBot: false},
+			randFunc:        func() float32 { return 0.4 },
+			allowedChannels: map[string]bool{"ch-allowed": true},
+			shouldSend:      false,
+		},
+		{
+			name:            "ボットの発言には(許可チャンネルでも)反応しない",
+			message:         &TestMessage{content: "any", channelID: "ch-allowed", authorIsBot: true},
+			randFunc:        func() float32 { return 0.1 },
+			allowedChannels: map[string]bool{"ch-allowed": true},
+			shouldSend:      false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			sentContent = "" // 各テストの前にリセット
+			messageCreate(mockSession, tc.message, testLines, tc.randFunc, tc.allowedChannels)
 
-			messageCreate(mockSession, tc.message, testLines, tc.randFunc)
-
-			if tc.shouldSend && sentContent == "" {
-				t.Error(tc.expectedError)
-			}
-
-			if !tc.shouldSend && sentContent != "" {
-				t.Errorf("%s: %s", tc.expectedError, sentContent)
+			if tc.shouldSend {
+				if sentContent == "" {
+					t.Error("メッセージが送信されませんでした")
+				} else if sentContent != tc.expectedContent {
+					t.Errorf("期待する内容と異なります。\ngot:  %q\nwant: %q", sentContent, tc.expectedContent)
+				}
+			} else {
+				if sentContent != "" {
+					t.Errorf("メッセージが送信されないはずが、送信されました: %s", sentContent)
+				}
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"strings"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -31,6 +32,7 @@ type Line struct {
 }
 
 var lines []Line
+var allowedRandomReplyChannels map[string]bool
 
 type DiscordMessageCreateAdapter struct {
 	*discordgo.MessageCreate
@@ -105,6 +107,15 @@ func main() {
 		return
 	}
 
+	// 環境変数からランダム返信を許可するチャンネルIDを読み込む
+	rawChannels := os.Getenv("ALLOW_RANDOM_REPLY_CHANNELS")
+	if rawChannels != "" {
+		allowedRandomReplyChannels = make(map[string]bool)
+		for _, id := range strings.Split(rawChannels, ",") {
+			allowedRandomReplyChannels[strings.TrimSpace(id)] = true
+		}
+	}
+
 	rand.Seed(time.Now().UnixNano())
 
 	// Create new discord session (know I am online to discord server)
@@ -116,7 +127,7 @@ func main() {
 
 	// ハンドラーをラップ
 	wrappedHandler := func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		messageCreate(&DiscordSessionAdapter{s}, &DiscordMessageCreateAdapter{m}, lines, rand.Float32)
+		messageCreate(&DiscordSessionAdapter{s}, &DiscordMessageCreateAdapter{m}, lines, rand.Float32, allowedRandomReplyChannels)
 	}
 	// スラッシュコマンド用のハンドラーを追加
 	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -160,12 +171,6 @@ func main() {
 	dg.Close()
 }
 
-// sendRandomLine は、与えられたセリフリストからランダムに一つを選んで送信する共通関数
-func sendRandomLine(s ChannelMessageSender, channelID string, lines []Line) {
-	response := getRandomLine(lines)
-	s.ChannelMessageSend(channelID, response)
-}
-
 func getRandomLine(lines []Line) string {
 	if len(lines) == 0 {
 		return "セリフが見つかりませんでした"
@@ -176,17 +181,27 @@ func getRandomLine(lines []Line) string {
 }
 
 // メッセージハンドラー
-func messageCreate(s ChannelMessageSender, m MessageCreator, lines []Line, randFunc func() float32) {
+func messageCreate(s ChannelMessageSender, m MessageCreator, lines []Line, randFunc func() float32, allowedChannels map[string]bool) {
 	// ボット自身の発言には反応しない
 	if m.AuthorIsBot() {
 		return
 	}
 
-	shouldReplyRandomly := randFunc() < 0.3
+	// ランダム返信が許可されたチャンネルでなければ何もしない
+	if allowedChannels == nil || !allowedChannels[m.ChannelID()] {
+		return
+	}
+
+	randVal := randFunc()
 
 	// 30%の確率で返信する
-	if shouldReplyRandomly {
-		sendRandomLine(s, m.ChannelID(), lines)
+	if randVal < 0.3 {
+		response := getRandomLine(lines)
+		diceRoll := int(randVal*100) + 1
+		successThreshold := 30
+		diceResultMessage := fmt.Sprintf("(1D100<=%d) ＞ %d ＞ 成功！", successThreshold, diceRoll)
+		finalResponse := fmt.Sprintf("%s\n%s", diceResultMessage, response)
+		s.ChannelMessageSend(m.ChannelID(), finalResponse)
 	}
 }
 
