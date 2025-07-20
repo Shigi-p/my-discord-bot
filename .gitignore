@@ -3,5 +3,5 @@
 .DS_Store
 
 client_secrets.json
-credential.json
+credentials.json
 serif-list.csv
